@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pickle Time</title>
+  <link rel="stylesheet" href="style.css">
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <button id="backBtn" class="icon-btn" hidden aria-label="Back">‹</button>
+    <h1 id="title">🏓 Pickle Time</h1>
+    <img id="avatar" class="avatar" hidden alt="">
+  </header>
+
+  <main id="app">
+    <section id="view-loading" class="view">
+      <p class="muted center">Loading…</p>
+    </section>
+
+    <section id="view-devlogin" class="view" hidden>
+      <div class="card">
+        <h2>Test login</h2>
+        <p class="muted">LINE isn't configured, so this is a local test login. Type any name.</p>
+        <form id="devLoginForm" class="row">
+          <input id="devName" placeholder="Your name" maxlength="40" required>
+          <button class="btn primary">Log in</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="view-home" class="view" hidden>
+      <div class="card">
+        <h2>Join friends</h2>
+        <p class="muted">Enter the 4-character code a friend shared.</p>
+        <form id="joinForm" class="row">
+          <input id="joinCode" class="code-input" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="ABCD" required>
+          <button class="btn primary">Join</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Start a group</h2>
+        <form id="createForm" class="row">
+          <input id="groupName" placeholder="e.g. Sunday Picklers" maxlength="60">
+          <button class="btn">Create</button>
+        </form>
+      </div>
+      <h3 class="section-title">My groups</h3>
+      <ul id="groupList" class="list"></ul>
+    </section>
+
+    <section id="view-group" class="view" hidden>
+      <div class="card code-card">
+        <div>
+          <div class="muted small">Join code</div>
+          <div id="groupCode" class="big-code"></div>
+        </div>
+        <button id="shareBtn" class="btn primary">Invite</button>
+      </div>
+      <div id="memberRow" class="members"></div>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="best">Best times</button>
+        <button class="tab" data-tab="mine">My free time</button>
+      </div>
+
+      <div id="bestPanel">
+        <ol id="topTimes" class="top-times"></ol>
+      </div>
+      <p id="mineHint" class="muted small" hidden>Tap or drag across the hours you're free. Saved automatically.</p>
+
+      <div class="week-nav">
+        <button id="prevWeek" class="icon-btn" aria-label="Previous week">‹</button>
+        <span id="weekLabel"></span>
+        <button id="nextWeek" class="icon-btn" aria-label="Next week">›</button>
+      </div>
+      <div id="grid" class="grid"></div>
+      <p id="cellInfo" class="cell-info muted small"></p>
+      <p id="saveState" class="muted small center"></p>
+
+      <button id="leaveBtn" class="btn ghost danger">Leave group</button>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

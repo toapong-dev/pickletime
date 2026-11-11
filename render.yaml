@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: pickle-time
+    runtime: node
+    plan: starter            # persistent disks need a paid plan
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/config
+    envVars:
+      - key: NODE_VERSION
+        value: "22.13.0"
+      - key: DB_PATH
+        value: /data/pickle.sqlite
+      - key: LIFF_ID
+        sync: false          # set in the Render dashboard
+      - key: LINE_CHANNEL_ID
+        sync: false
+    disk:
+      name: pickle-data
+      mountPath: /data
+      sizeGB: 1
