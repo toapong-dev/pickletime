@@ -4,15 +4,16 @@
   "description": "LINE LIFF app for friends to find common free time to play pickleball",
   "main": "server.js",
   "scripts": {
-    "start": "node --no-warnings server.js",
-    "dev": "DEV_LOGIN=1 node --no-warnings --watch server.js"
+    "start": "node server.js",
+    "dev": "DEV_LOGIN=1 node --watch server.js"
   },
   "license": "ISC",
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "express": "^4.22.3"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=20"
   },
   "private": true
 }

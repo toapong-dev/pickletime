@@ -1,20 +1,23 @@
 // Pickleball free-time finder: LINE LIFF app backend.
-// Run: LIFF_ID=... LINE_CHANNEL_ID=... node server.js
+// Run: LIFF_ID=... LINE_CHANNEL_ID=... TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... node server.js
+// Without TURSO_DATABASE_URL it uses a local SQLite file (fine for testing).
 const express = require('express');
 const crypto = require('node:crypto');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+const { createClient } = require('@libsql/client');
 
 const PORT = process.env.PORT || 3000;
 const LIFF_ID = process.env.LIFF_ID || '';
 const LINE_CHANNEL_ID = process.env.LINE_CHANNEL_ID || '';
 const DEV_LOGIN = process.env.DEV_LOGIN === '1';
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.sqlite');
+const DB_URL = process.env.TURSO_DATABASE_URL || 'file:' + (process.env.DB_PATH || path.join(__dirname, 'data.sqlite'));
 
-const db = new DatabaseSync(DB_PATH);
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
+const db = createClient({ url: DB_URL, authToken: process.env.TURSO_AUTH_TOKEN });
+const all = async (sql, args = []) => (await db.execute({ sql, args })).rows;
+const one = async (sql, args = []) => (await all(sql, args))[0];
+const run = (sql, args = []) => db.execute({ sql, args });
+
+const ready = db.executeMultiple(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, picture TEXT
   );
@@ -50,38 +53,41 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ---------- helpers ----------
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
-function newCode() {
+async function newCode() {
   for (let i = 0; i < 50; i++) {
     let c = '';
     for (let j = 0; j < 4; j++) c += CODE_ALPHABET[crypto.randomInt(CODE_ALPHABET.length)];
-    if (!db.prepare('SELECT 1 FROM groups WHERE code = ?').get(c)) return c;
+    if (!(await one('SELECT 1 FROM groups WHERE code = ?', [c]))) return c;
   }
   throw new Error('Could not generate a unique code');
 }
 
 function upsertUser({ id, name, picture }) {
-  db.prepare(`INSERT INTO users (id, name, picture) VALUES (?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET name = excluded.name, picture = excluded.picture`)
-    .run(id, name || 'LINE user', picture || null);
+  return run(`INSERT INTO users (id, name, picture) VALUES (?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET name = excluded.name, picture = excluded.picture`,
+    [id, name || 'LINE user', picture || null]);
 }
 
-function newSession(userId) {
+async function newSession(userId) {
   const token = crypto.randomBytes(32).toString('hex');
-  db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, userId, Date.now());
+  await run('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)', [token, userId, Date.now()]);
   return token;
 }
 
-function auth(req, res, next) {
-  const token = (req.get('authorization') || '').replace(/^Bearer /, '');
-  const row = token && db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`).get(token);
-  if (!row) return res.status(401).json({ error: 'Please log in again' });
-  req.user = row;
-  next();
-}
+// Wrap async handlers so errors become 500s instead of crashing.
+const h = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
-function memberGroup(req, res) {
-  const g = db.prepare(`SELECT g.* FROM groups g JOIN members m ON m.group_id = g.id
-    WHERE g.id = ? AND m.user_id = ?`).get(Number(req.params.id), req.user.id);
+const auth = h(async (req, res, next) => {
+  const token = (req.get('authorization') || '').replace(/^Bearer /, '');
+  const row = token && await one(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?`, [token]);
+  if (!row) return res.status(401).json({ error: 'Please log in again' });
+  req.user = { id: row.id, name: row.name, picture: row.picture };
+  next();
+});
+
+async function memberGroup(req, res) {
+  const g = await one(`SELECT g.* FROM groups g JOIN members m ON m.group_id = g.id
+    WHERE g.id = ? AND m.user_id = ?`, [Number(req.params.id), req.user.id]);
   if (!g) res.status(404).json({ error: 'Group not found' });
   return g;
 }
@@ -104,96 +110,104 @@ app.post('/api/login', async (req, res) => {
     });
     const p = await r.json();
     if (!r.ok || !p.sub) return res.status(401).json({ error: p.error_description || 'LINE login failed' });
-    upsertUser({ id: p.sub, name: p.name, picture: p.picture });
-    res.json({ token: newSession(p.sub), user: { id: p.sub, name: p.name, picture: p.picture } });
+    await upsertUser({ id: p.sub, name: p.name, picture: p.picture });
+    res.json({ token: await newSession(p.sub), user: { id: p.sub, name: p.name, picture: p.picture } });
   } catch (e) {
     res.status(502).json({ error: 'Could not reach LINE' });
   }
 });
 
 // Local testing without LINE (only when DEV_LOGIN=1).
-app.post('/api/dev-login', (req, res) => {
+app.post('/api/dev-login', h(async (req, res) => {
   if (!DEV_LOGIN) return res.status(404).end();
   const name = String(req.body?.name || '').trim().slice(0, 40);
   if (!name) return res.status(400).json({ error: 'Name required' });
   const id = 'dev-' + crypto.createHash('sha1').update(name).digest('hex').slice(0, 12);
-  upsertUser({ id, name });
-  res.json({ token: newSession(id), user: { id, name } });
-});
+  await upsertUser({ id, name });
+  res.json({ token: await newSession(id), user: { id, name } });
+}));
 
 app.get('/api/me', auth, (req, res) => res.json({ user: req.user }));
 
-app.get('/api/groups', auth, (req, res) => {
-  const groups = db.prepare(`SELECT g.id, g.name, g.code,
+app.get('/api/groups', auth, h(async (req, res) => {
+  const groups = await all(`SELECT g.id, g.name, g.code,
       (SELECT COUNT(*) FROM members WHERE group_id = g.id) AS member_count
     FROM groups g JOIN members m ON m.group_id = g.id
-    WHERE m.user_id = ? ORDER BY m.joined_at DESC`).all(req.user.id);
+    WHERE m.user_id = ? ORDER BY m.joined_at DESC`, [req.user.id]);
   res.json({ groups });
-});
+}));
 
-app.post('/api/groups', auth, (req, res) => {
+app.post('/api/groups', auth, h(async (req, res) => {
   const name = String(req.body?.name || '').trim().slice(0, 60) || 'Pickleball crew';
-  const code = newCode();
+  const code = await newCode();
   const now = Date.now();
-  const { lastInsertRowid } = db.prepare('INSERT INTO groups (name, code, owner_id, created_at) VALUES (?, ?, ?, ?)')
-    .run(name, code, req.user.id, now);
-  db.prepare('INSERT INTO members (group_id, user_id, joined_at) VALUES (?, ?, ?)').run(lastInsertRowid, req.user.id, now);
-  res.json({ group: { id: Number(lastInsertRowid), name, code } });
-});
+  const { lastInsertRowid } = await run('INSERT INTO groups (name, code, owner_id, created_at) VALUES (?, ?, ?, ?)',
+    [name, code, req.user.id, now]);
+  const id = Number(lastInsertRowid);
+  await run('INSERT INTO members (group_id, user_id, joined_at) VALUES (?, ?, ?)', [id, req.user.id, now]);
+  res.json({ group: { id, name, code } });
+}));
 
-app.post('/api/join', auth, (req, res) => {
+app.post('/api/join', auth, h(async (req, res) => {
   const code = String(req.body?.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const g = code.length === 4 && db.prepare('SELECT id, name, code FROM groups WHERE code = ?').get(code);
+  const g = code.length === 4 && await one('SELECT id, name, code FROM groups WHERE code = ?', [code]);
   if (!g) return res.status(404).json({ error: 'No group with that code' });
-  db.prepare('INSERT OR IGNORE INTO members (group_id, user_id, joined_at) VALUES (?, ?, ?)').run(g.id, req.user.id, Date.now());
-  res.json({ group: g });
-});
+  await run('INSERT OR IGNORE INTO members (group_id, user_id, joined_at) VALUES (?, ?, ?)', [g.id, req.user.id, Date.now()]);
+  res.json({ group: { id: Number(g.id), name: g.name, code: g.code } });
+}));
 
-app.get('/api/groups/:id', auth, (req, res) => {
-  const g = memberGroup(req, res);
+app.get('/api/groups/:id', auth, h(async (req, res) => {
+  const g = await memberGroup(req, res);
   if (!g) return;
-  const members = db.prepare(`SELECT u.id, u.name, u.picture FROM members m JOIN users u ON u.id = m.user_id
-    WHERE m.group_id = ? ORDER BY m.joined_at`).all(g.id);
-  const rows = db.prepare('SELECT user_id, slot FROM availability WHERE group_id = ?').all(g.id);
+  const members = (await all(`SELECT u.id, u.name, u.picture FROM members m JOIN users u ON u.id = m.user_id
+    WHERE m.group_id = ? ORDER BY m.joined_at`, [g.id])).map((m) => ({ id: m.id, name: m.name, picture: m.picture }));
+  const rows = await all('SELECT user_id, slot FROM availability WHERE group_id = ?', [g.id]);
   const availability = {};
   for (const r of rows) (availability[r.user_id] ||= []).push(r.slot);
-  res.json({ group: { id: g.id, name: g.name, code: g.code, ownerId: g.owner_id }, members, availability });
-});
+  res.json({ group: { id: Number(g.id), name: g.name, code: g.code, ownerId: g.owner_id }, members, availability });
+}));
 
 // Replace my free slots for the given dates.
-app.put('/api/groups/:id/availability', auth, (req, res) => {
-  const g = memberGroup(req, res);
+app.put('/api/groups/:id/availability', auth, h(async (req, res) => {
+  const g = await memberGroup(req, res);
   if (!g) return;
   const { dates, slots } = req.body || {};
   if (!Array.isArray(dates) || !Array.isArray(slots) || dates.length > 60 || slots.length > 2000) {
     return res.status(400).json({ error: 'Bad request' });
   }
   const dateSet = new Set(dates.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)));
-  const del = db.prepare('DELETE FROM availability WHERE group_id = ? AND user_id = ? AND substr(slot, 1, 10) = ?');
-  const ins = db.prepare('INSERT OR IGNORE INTO availability (group_id, user_id, slot) VALUES (?, ?, ?)');
-  db.exec('BEGIN');
-  try {
-    for (const d of dateSet) del.run(g.id, req.user.id, d);
-    for (const s of slots) if (SLOT_RE.test(s) && dateSet.has(s.slice(0, 10))) ins.run(g.id, req.user.id, s);
-    db.exec('COMMIT');
-  } catch (e) {
-    db.exec('ROLLBACK');
-    throw e;
+  const stmts = [];
+  for (const d of dateSet) {
+    stmts.push({ sql: 'DELETE FROM availability WHERE group_id = ? AND user_id = ? AND substr(slot, 1, 10) = ?', args: [g.id, req.user.id, d] });
   }
+  for (const s of new Set(slots)) {
+    if (typeof s === 'string' && SLOT_RE.test(s) && dateSet.has(s.slice(0, 10))) {
+      stmts.push({ sql: 'INSERT OR IGNORE INTO availability (group_id, user_id, slot) VALUES (?, ?, ?)', args: [g.id, req.user.id, s] });
+    }
+  }
+  await db.batch(stmts, 'write'); // one transaction
   res.json({ ok: true });
-});
+}));
 
-app.delete('/api/groups/:id/membership', auth, (req, res) => {
-  const g = memberGroup(req, res);
+app.delete('/api/groups/:id/membership', auth, h(async (req, res) => {
+  const g = await memberGroup(req, res);
   if (!g) return;
-  db.prepare('DELETE FROM availability WHERE group_id = ? AND user_id = ?').run(g.id, req.user.id);
-  db.prepare('DELETE FROM members WHERE group_id = ? AND user_id = ?').run(g.id, req.user.id);
-  const left = db.prepare('SELECT COUNT(*) AS n FROM members WHERE group_id = ?').get(g.id).n;
-  if (!left) db.prepare('DELETE FROM groups WHERE id = ?').run(g.id);
+  await db.batch([
+    { sql: 'DELETE FROM availability WHERE group_id = ? AND user_id = ?', args: [g.id, req.user.id] },
+    { sql: 'DELETE FROM members WHERE group_id = ? AND user_id = ?', args: [g.id, req.user.id] },
+    { sql: 'DELETE FROM availability WHERE group_id = ? AND NOT EXISTS (SELECT 1 FROM members WHERE group_id = ?)', args: [g.id, g.id] },
+    { sql: 'DELETE FROM groups WHERE id = ? AND NOT EXISTS (SELECT 1 FROM members WHERE group_id = ?)', args: [g.id, g.id] },
+  ], 'write');
   res.json({ ok: true });
+}));
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'Server error, please try again' });
 });
 
-app.listen(PORT, () => {
+ready.then(() => app.listen(PORT, () => {
   console.log(`Pickleball app on http://localhost:${PORT}` + (DEV_LOGIN ? ' (dev login enabled)' : ''));
+  console.log('Database:', DB_URL.startsWith('file:') ? DB_URL : 'Turso');
   if (!LIFF_ID && !DEV_LOGIN) console.warn('Warning: LIFF_ID is not set and DEV_LOGIN is off; nobody can log in.');
-});
+}));

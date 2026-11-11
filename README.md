@@ -8,7 +8,7 @@ A LINE web app (LIFF) that helps a group of friends find a common free time to p
 - **My free time**: tap or drag across a weekly grid (06:00–22:00, next 4 weeks) to mark the hours you're free. Saves automatically.
 - **Best times**: a heat map of how many friends are free each hour, plus the top 5 time blocks with the most people free and who they are.
 
-Stack: Node.js 22 + Express, built-in SQLite (`node:sqlite`), plain HTML/CSS/JS. One dependency.
+Stack: Node.js 20+ + Express, [Turso](https://turso.tech) (hosted SQLite, free tier) for data, plain HTML/CSS/JS. Runs on Render's free plan. Locally it uses a SQLite file, so no account is needed to try it.
 
 ## Try it locally (no LINE needed)
 
@@ -39,20 +39,26 @@ Your app link to share is `https://liff.line.me/<LIFF ID>`. Invite links add `?c
 | `LIFF_ID` | yes | LIFF app ID from the LINE console |
 | `LINE_CHANNEL_ID` | yes | Channel ID of the LINE Login channel (used to verify ID tokens) |
 | `PORT` | no | Default `3000` |
-| `DB_PATH` | no | SQLite file path. Default `./data.sqlite`. Put it on a persistent disk in production. |
+| `TURSO_DATABASE_URL` | in production | e.g. `libsql://pickle-time-yourname.turso.io`. If unset, a local file is used. |
+| `TURSO_AUTH_TOKEN` | in production | Turso database token |
+| `DB_PATH` | no | Local SQLite file when Turso isn't set. Default `./data.sqlite`. |
 | `DEV_LOGIN` | no | `1` turns on the name-only test login. **Never enable in production.** |
 
-## Deploy
+## Deploy for free (Render + Turso)
 
-Any host that runs Node 22+ over HTTPS with a persistent disk works. For example on **Render**:
+**1. Database (Turso, free)**
+1. Sign up at [turso.tech](https://turso.tech) (you can use your GitHub account).
+2. Create a database, e.g. `pickle-time`, in a region near you (Singapore for Thailand).
+3. Copy its **URL** (`libsql://…turso.io`) and create a **token** for it.
 
-1. Push this folder to a GitHub repo. It includes a `render.yaml` Blueprint, so you can use New → Blueprint and skip steps 2–3.
-2. New → Web Service → pick the repo. Build: `npm install`. Start: `npm start`.
-3. Add a Disk mounted at `/data` and set `DB_PATH=/data/pickle.sqlite`.
-4. Set `LIFF_ID` and `LINE_CHANNEL_ID`.
-5. Put the service URL into the LIFF Endpoint URL.
+The app creates its tables on first start.
 
-Fly.io or Railway (with a volume) work the same way. A plain VPS behind HTTPS (Caddy/nginx) works too.
+**2. Web app (Render, free)**
+1. On [Render](https://render.com), choose **New → Blueprint** and pick this repo. It reads `render.yaml` (free plan).
+2. Fill in `LIFF_ID`, `LINE_CHANNEL_ID`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` when asked.
+3. Put the Render URL (e.g. `https://pickle-time.onrender.com/`) into the LIFF Endpoint URL.
+
+Render's free plan sleeps after ~15 minutes without visitors; the first open after that takes 30–60 seconds. Data is safe in Turso.
 
 ## API (for reference)
 
